@@ -1,0 +1,3 @@
+[submodule "jetson-yolov8"]
+	path = jetson-yolov8
+	url = https://github.com/hum4n12/jetson-yolov8.git
