@@ -1,6 +1,7 @@
-from flask import Flask, render_template, request,  make_response, jsonify
+from flask import Flask, render_template, request,  make_response, jsonify, Response
 import json
 import rospy
+from std_msgs.msg import String
 from cv_bridge import CvBridge, CvBridgeError
 from sensor_msgs.msg import Image
 from flask_socketio import SocketIO
@@ -10,10 +11,11 @@ from threading import Event
 import queue
 import time
 
-image_queue = queue.Queue(maxsize=40)
-thread_event = Event()
-
+image_queue = queue.Queue(maxsize=120)
 IMAGE_TOPIC='/image'
+ITEM_TOPIC='/item'
+
+item_pub = rospy.Publisher(ITEM_TOPIC, String, queue_size=10)
 class Subscriber:
     def __init__(self):
         rospy.init_node('video_subscriber', anonymous=True)
@@ -24,7 +26,6 @@ class Subscriber:
         try:
             image = self.bridge.imgmsg_to_cv2(msg, "rgb8")
             image_queue.put(image)
-            print(image_queue.qsize())
         except CvBridgeError as e:
             print(e)
             return
@@ -39,38 +40,29 @@ with open("items.json") as file:
 def main():
     if request.method == 'POST':
         data = request.get_json()
-        print(data)
+        classes = []
+        if int(data) != 100:
+            classes.append(int(data))
+        print(classes)
+        item_pub.publish(json.dumps(classes))
         return make_response(jsonify(message="OK"), 200)
 
     return render_template('index.html', items = items)
+    
+def gen_frames():   
+    while True:
+        try:
+            frame = image_queue.get()  # read the camera frame
+            _, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')  # concat frame one by one and show result
+        except:
+            return "error"
 
-def generate(event):
-    while not image_queue.full():
-        print("waiting")
-
-    try:
-        while event.is_set():
-            print(image_queue._qsize())
-            image = image_queue.get()
-
-            _, buffer = cv2.imencode('.jpg', image)
-            frame_bytes = base64.b64encode(buffer)
-            socketio.emit('video_frame', {'image': frame_bytes.decode('utf-8')})
-            sleep_time = 0.2
-            time.sleep(sleep_time)
-    finally: 
-        event.clear()
-
-@socketio.on('connect')
-def handle_connect():
-    print('Client connected')
-    thread_event.set()
-    socketio.start_background_task(generate, thread_event)
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('dc')
-    thread_event.clear()
+@app.route('/video_feed')
+def video_feed():
+    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
     subscriber = Subscriber()
